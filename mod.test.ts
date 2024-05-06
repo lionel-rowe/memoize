@@ -45,20 +45,20 @@ Deno.test(_serializeArgList.name, async (t) => {
     );
   });
 
-  await t.step("non-primitive types", () => {
+  await t.step("reference types", () => {
     const getKey = _serializeArgList(new Map());
     const obj1 = {};
     const arr2: [] = [];
     const sym3 = Symbol();
 
-    assertEquals(getKey(obj1), "undefined,\x01{0}\x02");
-    assertEquals(getKey(obj1, obj1), "undefined,\x01{0}\x02,\x01{0}\x02");
+    assertEquals(getKey(obj1), "undefined,{0}");
+    assertEquals(getKey(obj1, obj1), "undefined,{0},{0}");
 
-    assertEquals(getKey(arr2), "undefined,\x01{1}\x02");
-    assertEquals(getKey(sym3), "undefined,\x01{2}\x02");
+    assertEquals(getKey(arr2), "undefined,{1}");
+    assertEquals(getKey(sym3), "undefined,{2}");
     assertEquals(
       getKey(obj1, arr2, sym3),
-      "undefined,\x01{0}\x02,\x01{1}\x02,\x01{2}\x02",
+      "undefined,{0},{1},{2}",
     );
   });
 
@@ -68,29 +68,28 @@ Deno.test(_serializeArgList.name, async (t) => {
     const this2 = {};
 
     assertEquals(getKey(), "undefined");
-    assertEquals(getKey.call(this1), "\x01{0}\x02");
-    assertEquals(getKey.call(this2), "\x01{1}\x02");
-    assertEquals(getKey.call(this1, this2), "\x01{0}\x02,\x01{1}\x02");
+    assertEquals(getKey.call(this1), "{0}");
+    assertEquals(getKey.call(this2), "{1}");
+    assertEquals(getKey.call(this1, this2), "{0},{1}");
   });
 
   await t.step("garbage collection for weak keys", () => {
     const OriginalFinalizationRegistry = globalThis.FinalizationRegistry;
     globalThis.FinalizationRegistry = class MockFinalizationRegistry<T>
-      implements FinalizationRegistry<T> {
-      [Symbol.toStringTag] = "FinalizationRegistry" as const;
+      extends globalThis.FinalizationRegistry<T> {
+      #cleanupCallback: (heldValue: T) => void;
 
-      constructor(public cleanupCallback: (heldValue: T) => void) {}
+      constructor(cleanupCallback: (heldValue: T) => void) {
+        super(cleanupCallback);
+        this.#cleanupCallback = cleanupCallback;
+      }
 
       register(target: WeakKey, heldValue: T) {
         Object.assign(target, {
           [Symbol.dispose]: () => {
-            this.cleanupCallback(heldValue);
+            this.#cleanupCallback(heldValue);
           },
         });
-      }
-
-      unregister() {
-        unimplemented();
       }
     };
 
