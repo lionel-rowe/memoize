@@ -653,11 +653,28 @@ Deno.test(memoize.name, async (t) => {
   });
 
   await t.step("fn length", () => {
+    assertEquals(memoize.length, 2);
+
     assertEquals(memoize(() => {}).length, 0);
     assertEquals(memoize((_arg) => {}).length, 1);
     assertEquals(memoize((_1, _2) => {}).length, 2);
     assertEquals(memoize((..._args) => {}).length, 0);
     assertEquals(memoize((_1, ..._args) => {}).length, 1);
+  });
+
+  await t.step("fn name", () => {
+    assertEquals(memoize.name, "memoize");
+
+    const fn1 = () => {};
+    function fn2() {}
+    const obj = { ["!"]: () => {} };
+
+    assertEquals(memoize(() => {}).name, "");
+    assertEquals(memoize(fn1).name, "fn1");
+    assertEquals(memoize(fn1.bind({})).name, "bound fn1");
+    assertEquals(memoize(fn2).name, "fn2");
+    assertEquals(memoize(function fn3() {}).name, "fn3");
+    assertEquals(memoize(obj["!"]).name, "!");
   });
 
   await t.step("on-the-fly memoization", () => {
@@ -707,8 +724,7 @@ Deno.test(memoize.name, async (t) => {
         // @ts-expect-error Type 'string' is not assignable to type 'number'.
         const _a2: Parameters<typeof fn>[0] = "1";
         // @ts-expect-error Tuple type '[x: number]' of length '1' has no element at index '1'.
-        // deno-lint-ignore no-explicit-any
-        const _a3: Parameters<typeof fn>[1] = {} as any;
+        const _a3: Parameters<typeof fn>[1] = {} as never;
 
         const _r1: ReturnType<typeof fn> = 1;
         // @ts-expect-error Type 'string' is not assignable to type 'number'.

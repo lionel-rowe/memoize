@@ -44,7 +44,7 @@ const _getKey = _serializeArgList(_cache);
  * assertEquals(fib(100n), 354224848179261915075n);
  * ```
  */
-export const memoize = _memoize(_memoize, {
+const memoize_ = memoize(memoize, {
   cache: _cache,
   getKey(fn, options) {
     const optionVals = Object.entries(options ?? {})
@@ -54,9 +54,10 @@ export const memoize = _memoize(_memoize, {
   },
 });
 
-function _memoize<
-  // deno-lint-ignore no-explicit-any
-  Fn extends (...args: any[]) => unknown,
+export { memoize_ as memoize };
+
+function memoize<
+  Fn extends (...args: never[]) => unknown,
   This extends ThisParameterType<Fn> = ThisParameterType<Fn>,
   Args extends Parameters<Fn> = Parameters<Fn>,
   Return = ReturnType<Fn>,
@@ -94,8 +95,10 @@ function _memoize<
     return val as Return;
   } as Fn;
 
-  Object.defineProperty(memoized, "length", { value: fn.length });
-  return Object.assign(memoized, { cache, getKey });
+  return Object.defineProperties(Object.assign(memoized, { cache, getKey }), {
+    length: { value: fn.length },
+    name: { value: fn.name },
+  });
 }
 
 /** Default serialization of arguments list for use as cache keys */
