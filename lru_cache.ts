@@ -1,4 +1,4 @@
-import type { MemoizationCache, MemoizationCacheKey } from "./memoize.ts";
+import type { MemoizationCache } from "./memoize.ts";
 
 /**
  * [Least-recently-used](
@@ -8,7 +8,7 @@ import type { MemoizationCache, MemoizationCacheKey } from "./memoize.ts";
  * Automatically removes entries above the max size based on when they were
  * last accessed with `get`, `set`, or `has`.
  */
-export class LruCache<K extends MemoizationCacheKey, V> extends Map<K, V>
+export class LruCache<K, V> extends Map<K, V>
   implements MemoizationCache<K, V> {
   constructor(public maxSize: number) {
     super();

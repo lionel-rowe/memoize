@@ -1,13 +1,6 @@
-export type MemoizationCacheKey =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined
-  | bigint
-  | WeakKey;
+import { LruCache } from "./lru_cache.ts";
 
-export type MemoizationCache<K extends MemoizationCacheKey, V> = {
+export type MemoizationCache<K, V> = {
   has: (key: K) => boolean;
   get: (key: K) => V | undefined;
   set: (key: K, val: V) => unknown;
@@ -16,9 +9,9 @@ export type MemoizationCache<K extends MemoizationCacheKey, V> = {
 
 export type MemoizationOptions<This, Args extends unknown[], Return> = {
   /** Function to get a unique cache key from the function's arguments */
-  getKey?: (this: This, ...args: Args) => MemoizationCacheKey;
+  getKey?: (this: This, ...args: Args) => unknown;
   /** Cache (such as a `Map` object) for getting previous results */
-  cache?: MemoizationCache<MemoizationCacheKey, Return>;
+  cache?: MemoizationCache<unknown, Return>;
   /**
    * Only use args as cache keys up to the `length` property of the function.
    * Useful for passing unary functions as array callbacks, but should be
@@ -28,6 +21,10 @@ export type MemoizationOptions<This, Args extends unknown[], Return> = {
   truncateArgs?: boolean;
 };
 
+// used for memoizing the `memoize` function itself to enable on-the-fly usage
+const _cache = new LruCache(100);
+const _getKey = _serializeArgList(_cache);
+
 /**
  * Cache the results of a function based on its arguments.
  *
@@ -36,18 +33,39 @@ export type MemoizationOptions<This, Args extends unknown[], Return> = {
  *
  * @example
  * ```ts
+ * import { memoize } from "@std/caching";
+ * import { assertEquals } from "@std/assert";
+ *
  * // fibonacci function, which is very slow for n > ~30 if not memoized
  * const fib = memoize((n: bigint): bigint => {
  *   return n <= 2n ? 1n : fib(n - 1n) + fib(n - 2n);
  * });
+ *
+ * assertEquals(fib(100n), 354224848179261915075n);
  * ```
  */
-export function memoize<This, Args extends unknown[], Return>(
-  fn: (this: This, ...args: Args) => Return,
+export const memoize = _memoize(_memoize, {
+  cache: _cache,
+  getKey(fn, options) {
+    const optionVals = Object.entries(options ?? {})
+      .sort(([a], [b]) => a > b ? 1 : a < b ? -1 : 0)
+      .map(([, v]) => v);
+    return _getKey(fn, ...optionVals);
+  },
+});
+
+function _memoize<
+  // deno-lint-ignore no-explicit-any
+  Fn extends (...args: any[]) => unknown,
+  This extends ThisParameterType<Fn> = ThisParameterType<Fn>,
+  Args extends Parameters<Fn> = Parameters<Fn>,
+  Return = ReturnType<Fn>,
+>(
+  fn: Fn,
   options?: Partial<MemoizationOptions<This, Args, Return>>,
-): ((this: This, ...args: Args) => Return) & {
-  cache: MemoizationCache<MemoizationCacheKey, Return>;
-  getKey: (this: This, ...args: Args) => MemoizationCacheKey;
+): Fn & {
+  cache: MemoizationCache<unknown, Return>;
+  getKey: (this: This, ...args: Args) => unknown;
 } {
   const truncateArgs = options?.truncateArgs ?? false;
   const cache = options?.cache ?? new Map();
@@ -62,7 +80,7 @@ export function memoize<This, Args extends unknown[], Return>(
       return cache.get(key) as Return;
     }
 
-    let val = fn.apply(this, args);
+    let val = fn.apply(this, args) as Return;
 
     if (val instanceof Promise) {
       val = val.catch((reason) => {
@@ -74,7 +92,7 @@ export function memoize<This, Args extends unknown[], Return>(
     cache.set(key, val);
 
     return val as Return;
-  };
+  } as Fn;
 
   Object.defineProperty(memoized, "length", { value: fn.length });
   return Object.assign(memoized, { cache, getKey });
@@ -82,7 +100,7 @@ export function memoize<This, Args extends unknown[], Return>(
 
 /** Default serialization of arguments list for use as cache keys */
 export function _serializeArgList<Return>(
-  cache: MemoizationCache<MemoizationCacheKey, Return>,
+  cache: MemoizationCache<unknown, Return>,
 ): (this: unknown, ...args: unknown[]) => string {
   const weakKeyToKeySegmentCache = new WeakMap<WeakKey, string>();
   const weakKeySegmentToKeyCache = new Map<string, string[]>();
@@ -98,15 +116,28 @@ export function _serializeArgList<Return>(
   return function (...args) {
     const weakKeySegments: string[] = [];
     const keySegments = [this, ...args].map((arg) => {
-      if (
-        typeof arg === "string" || typeof arg === "number" ||
-        typeof arg === "boolean" || arg === null
-      ) {
-        return JSON.stringify(arg);
-      }
-
       if (typeof arg === "undefined") return "undefined";
       if (typeof arg === "bigint") return `${arg}n`;
+
+      if (
+        typeof arg !== "symbol" && typeof arg !== "function" &&
+        (arg === null || typeof arg !== "object")
+      ) {
+        // null, string, boolean, number, or one of the upcoming
+        // [record/tuple](https://github.com/tc39/proposal-record-tuple) types
+        try {
+          return JSON.stringify(arg);
+        } catch { /* fallthrough to weak cache */ }
+      }
+
+      try {
+        assertWeakKey(arg);
+      } catch (e) {
+        if (typeof arg === "symbol") {
+          return `Symbol.for(${JSON.stringify(arg.description)})`;
+        }
+        throw e;
+      }
 
       if (!weakKeyToKeySegmentCache.has(arg)) {
         const keySegment = `{${i++}}`;
@@ -130,4 +161,8 @@ export function _serializeArgList<Return>(
 
     return key;
   };
+}
+
+function assertWeakKey(arg: unknown): asserts arg is WeakKey {
+  new WeakRef(arg as WeakKey);
 }

@@ -3,31 +3,10 @@ import {
   assertAlmostEquals,
   assertEquals,
   assertRejects,
-  unimplemented,
 } from "@std/assert";
 import { delay } from "@std/async";
-import { _serializeArgList, LruCache, memoize } from "./mod.ts";
-
-Deno.test(LruCache.name, async (t) => {
-  await t.step("deletes least-recently-used", () => {
-    const cache = new LruCache(3);
-
-    cache.set(1, "!");
-    cache.set(2, "!");
-    cache.set(1, "updated");
-    cache.set(3, "!");
-    cache.set(4, "!");
-
-    assertEquals(cache.size, 3);
-    assert(!cache.has(2));
-    assertEquals([...cache.keys()], [1, 3, 4]);
-    assertEquals(cache.get(3), "!");
-    assertEquals(cache.get(1), "updated");
-
-    cache.delete(3);
-    assertEquals(cache.size, 2);
-  });
-});
+import { _serializeArgList, memoize } from "./memoize.ts";
+import { LruCache } from "./lru_cache.ts";
 
 Deno.test(_serializeArgList.name, async (t) => {
   await t.step("simple numbers", () => {
@@ -40,37 +19,37 @@ Deno.test(_serializeArgList.name, async (t) => {
   await t.step("primitive types", () => {
     const getKey = _serializeArgList(new Map());
     assertEquals(
-      getKey(1, "2", 3n, null, undefined, true),
-      'undefined,1,"2",3n,null,undefined,true',
+      getKey(1, "2", 3n, null, undefined, true, Symbol.for("xyz")),
+      'undefined,1,"2",3n,null,undefined,true,Symbol.for("xyz")',
     );
   });
 
   await t.step("reference types", () => {
     const getKey = _serializeArgList(new Map());
-    const obj1 = {};
-    const arr2: [] = [];
-    const sym3 = Symbol();
+    const obj = {};
+    const arr: [] = [];
+    const sym = Symbol("xyz");
 
-    assertEquals(getKey(obj1), "undefined,{0}");
-    assertEquals(getKey(obj1, obj1), "undefined,{0},{0}");
+    assertEquals(getKey(obj), "undefined,{0}");
+    assertEquals(getKey(obj, obj), "undefined,{0},{0}");
 
-    assertEquals(getKey(arr2), "undefined,{1}");
-    assertEquals(getKey(sym3), "undefined,{2}");
+    assertEquals(getKey(arr), "undefined,{1}");
+    assertEquals(getKey(sym), "undefined,{2}");
     assertEquals(
-      getKey(obj1, arr2, sym3),
+      getKey(obj, arr, sym),
       "undefined,{0},{1},{2}",
     );
   });
 
   await t.step("`this` arg", () => {
     const getKey = _serializeArgList(new Map());
-    const this1 = {};
-    const this2 = {};
+    const obj1 = {};
+    const obj2 = {};
 
     assertEquals(getKey(), "undefined");
-    assertEquals(getKey.call(this1), "{0}");
-    assertEquals(getKey.call(this2), "{1}");
-    assertEquals(getKey.call(this1, this2), "{0},{1}");
+    assertEquals(getKey.call(obj1), "{0}");
+    assertEquals(getKey.call(obj2), "{1}");
+    assertEquals(getKey.call(obj1, obj2), "{0},{1}");
   });
 
   await t.step("garbage collection for weak keys", () => {
@@ -86,30 +65,39 @@ Deno.test(_serializeArgList.name, async (t) => {
 
       register(target: WeakKey, heldValue: T) {
         Object.assign(target, {
-          [Symbol.dispose]: () => {
+          onCleanup: () => {
             this.#cleanupCallback(heldValue);
           },
         });
       }
     };
 
+    function makeRegisterableObject() {
+      const onCleanup = null as (() => void) | null;
+      return {
+        onCleanup,
+        [Symbol.dispose]() {
+          this.onCleanup?.();
+        },
+      };
+    }
+
     const cache = new Map();
     const getKey = _serializeArgList(cache);
 
-    const outerScopeObj = { [Symbol.dispose]: unimplemented };
+    using outerScopeObj = makeRegisterableObject();
+
     const k1 = getKey(outerScopeObj);
     const k2 = getKey(globalThis);
     const k3 = getKey("primitive");
     const k4 = getKey(globalThis, "primitive");
     const k5 = getKey(globalThis, "primitive", outerScopeObj);
 
-    using _0 = outerScopeObj;
-
     const persistentKeys = new Set([k1, k2, k3, k4, k5]);
 
     {
-      const obj1 = { [Symbol.dispose]: unimplemented };
-      const obj2 = { [Symbol.dispose]: unimplemented };
+      using obj1 = makeRegisterableObject();
+      using obj2 = makeRegisterableObject();
 
       const k6 = getKey(obj1);
       const k7 = getKey(obj2);
@@ -117,9 +105,6 @@ Deno.test(_serializeArgList.name, async (t) => {
       const k9 = getKey(obj1, globalThis);
       const k10 = getKey(obj1, "primitive");
       const k11 = getKey(obj1, outerScopeObj);
-
-      using _1 = obj1;
-      using _2 = obj2;
 
       const ephemeralKeys = new Set([k6, k7, k8, k9, k10, k11]);
 
@@ -187,6 +172,16 @@ Deno.test(memoize.name, async (t) => {
     assertEquals(numTimesCalled, 1);
     assertEquals(fn(888), -888);
     assertEquals(numTimesCalled, 2);
+  });
+
+  await t.step("fibonacci", () => {
+    const fib = memoize((n: bigint): bigint =>
+      n <= 2n ? 1n : fib(n - 1n) + fib(n - 2n)
+    );
+
+    const startTime = Date.now();
+    assertEquals(fib(100n), 354224848179261915075n);
+    assertAlmostEquals(Date.now(), startTime, 10);
   });
 
   await t.step("fibonacci", () => {
@@ -663,5 +658,82 @@ Deno.test(memoize.name, async (t) => {
     assertEquals(memoize((_1, _2) => {}).length, 2);
     assertEquals(memoize((..._args) => {}).length, 0);
     assertEquals(memoize((_1, ..._args) => {}).length, 1);
+  });
+
+  await t.step("on-the-fly memoization", () => {
+    let numTimesCalled = 0;
+
+    const fn = (arg?: unknown) => {
+      ++numTimesCalled;
+      return arg;
+    };
+
+    memoize(fn)();
+    assertEquals(numTimesCalled, 1);
+    memoize(fn)();
+    assertEquals(numTimesCalled, 1);
+
+    memoize(fn, {})();
+    assertEquals(numTimesCalled, 1);
+
+    memoize(fn, { cache: new Map() })();
+    assertEquals(numTimesCalled, 2);
+
+    memoize(fn, { cache: new Map() })();
+    assertEquals(numTimesCalled, 3);
+
+    const cache = new Map();
+    memoize(fn, { cache })();
+    assertEquals(numTimesCalled, 4);
+    memoize(fn, { cache })();
+    assertEquals(numTimesCalled, 4);
+  });
+
+  await t.step("TS types", async (t) => {
+    await t.step("simple types", () => {
+      // no need to run, only for type checking
+      void (() => {
+        const fn: (this: number, x: number) => number = (_) => 1;
+        const memoized = memoize(fn);
+
+        const _fn2: typeof fn = memoized;
+        const _fn3: Omit<typeof memoized, "cache" | "getKey"> = fn;
+
+        const _t1: ThisParameterType<typeof fn> = 1;
+        // @ts-expect-error Type 'string' is not assignable to type 'number'.
+        const _t2: ThisParameterType<typeof fn> = "1";
+
+        const _a1: Parameters<typeof fn>[0] = 1;
+        // @ts-expect-error Type 'string' is not assignable to type 'number'.
+        const _a2: Parameters<typeof fn>[0] = "1";
+        // @ts-expect-error Tuple type '[x: number]' of length '1' has no element at index '1'.
+        // deno-lint-ignore no-explicit-any
+        const _a3: Parameters<typeof fn>[1] = {} as any;
+
+        const _r1: ReturnType<typeof fn> = 1;
+        // @ts-expect-error Type 'string' is not assignable to type 'number'.
+        const _r2: ReturnType<typeof fn> = "1";
+      });
+    });
+
+    await t.step("generics", () => {
+      // no need to run, only for type checking
+      void (() => {
+        const fn = <T>(x: T): T => x;
+        const memoized = memoize(fn);
+
+        const _fn2: typeof fn = memoized;
+        const _fn3: Omit<typeof memoized, "cache" | "getKey"> = fn;
+
+        const _r1: number = fn(1);
+        const _r2: string = fn("1");
+        // @ts-expect-error Type 'string' is not assignable to type 'number'.
+        const _r3: number = fn("1");
+
+        const _fn4: typeof fn<number> = (n: number) => n;
+        // @ts-expect-error Type 'string' is not assignable to type 'number'.
+        const _fn5: typeof fn<string> = (n: number) => n;
+      });
+    });
   });
 });
