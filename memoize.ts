@@ -22,7 +22,7 @@ export type MemoizationOptions<This, Args extends unknown[], Return> = {
 };
 
 // used for memoizing the `memoize` function itself to enable on-the-fly usage
-const _cache = new LruCache(100);
+const _cache = new LruCache<unknown, ReturnType<typeof memoize>>(100);
 const _getKey = _serializeArgList(_cache);
 
 /**
@@ -60,7 +60,7 @@ function memoize<
   Fn extends (...args: never[]) => unknown,
   This extends ThisParameterType<Fn> = ThisParameterType<Fn>,
   Args extends Parameters<Fn> = Parameters<Fn>,
-  Return = ReturnType<Fn>,
+  Return extends ReturnType<Fn> = ReturnType<Fn>,
 >(
   fn: Fn,
   options?: Partial<MemoizationOptions<This, Args, Return>>,
