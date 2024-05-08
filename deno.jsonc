@@ -2,6 +2,7 @@
   "lock": false,
   "tasks": {
     "test": "deno test -A --watch --doc ./src",
+    "test-gc": "deno test -A --watch --doc --v8-flags=--expose-gc ./src",
     "docs": "deno run -A --watch ./scripts/build_docs.ts"
   },
   "imports": {

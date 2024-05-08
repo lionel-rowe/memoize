@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { _serializeArgList } from "./memoize.ts";
+import { delay } from "@std/async";
 
 Deno.test("simple numbers", () => {
   const getKey = _serializeArgList(new Map());
@@ -44,8 +45,14 @@ Deno.test("`this` arg", () => {
   assertEquals(getKey.call(obj1, obj2), "{0},{1}");
 });
 
-Deno.test("garbage collection for weak keys", () => {
-  const OriginalFinalizationRegistry = FinalizationRegistry;
+Deno.test("garbage collection for weak keys", async () => {
+  // @ts-expect-error - Triggering true garbage collection is only available
+  // with `--v8-flags="--expose-gc"`, so we mock `FinalizationRegistry` with
+  // `using` and some `Symbol.dispose` trickery if it's not available. Run this
+  // test with `deno test --v8-flags="--expose-gc"` to test actual gc behavior
+  // (however, even calling `globalThis.gc` doesn't _guarantee_ garbage
+  // collection, so this may be flaky between v8 versions etc.)
+  const gc = globalThis.gc as undefined | (() => void);
 
   class MockFinalizationRegistry<T> extends FinalizationRegistry<T> {
     #cleanupCallback: (heldValue: T) => void;
@@ -74,8 +81,12 @@ Deno.test("garbage collection for weak keys", () => {
     };
   }
 
+  const OriginalFinalizationRegistry = FinalizationRegistry;
+
   try {
-    globalThis.FinalizationRegistry = MockFinalizationRegistry;
+    if (!gc) {
+      globalThis.FinalizationRegistry = MockFinalizationRegistry;
+    }
 
     const cache = new Map();
     const getKey = _serializeArgList(cache);
@@ -90,7 +101,7 @@ Deno.test("garbage collection for weak keys", () => {
 
     const persistentKeys = new Set([k1, k2, k3, k4, k5]);
 
-    {
+    await (async () => {
       using obj1 = makeRegisterableObject();
       using obj2 = makeRegisterableObject();
 
@@ -104,13 +115,19 @@ Deno.test("garbage collection for weak keys", () => {
       const ephemeralKeys = new Set([k6, k7, k8, k9, k10, k11]);
 
       const keys = new Set([...ephemeralKeys, ...persistentKeys]);
-      for (const key of keys) {
-        cache.set(key, "!");
+      for (const [idx, key] of [...keys].entries()) {
+        cache.set(key, idx + 1);
       }
 
+      gc?.();
+      // wait for gc to run
+      await delay(0);
       assertEquals(cache.size, keys.size);
-    }
+    })();
 
+    gc?.();
+    // wait for gc to run
+    await delay(0);
     assertEquals(cache.size, persistentKeys.size);
   } finally {
     globalThis.FinalizationRegistry = OriginalFinalizationRegistry;
