@@ -53,9 +53,9 @@ Deno.test(_serializeArgList.name, async (t) => {
   });
 
   await t.step("garbage collection for weak keys", () => {
-    const OriginalFinalizationRegistry = globalThis.FinalizationRegistry;
-    globalThis.FinalizationRegistry = class MockFinalizationRegistry<T>
-      extends globalThis.FinalizationRegistry<T> {
+    const OriginalFinalizationRegistry = FinalizationRegistry;
+
+    class MockFinalizationRegistry<T> extends FinalizationRegistry<T> {
       #cleanupCallback: (heldValue: T) => void;
 
       constructor(cleanupCallback: (heldValue: T) => void) {
@@ -70,7 +70,7 @@ Deno.test(_serializeArgList.name, async (t) => {
           },
         });
       }
-    };
+    }
 
     function makeRegisterableObject() {
       const onCleanup = null as (() => void) | null;
@@ -82,43 +82,47 @@ Deno.test(_serializeArgList.name, async (t) => {
       };
     }
 
-    const cache = new Map();
-    const getKey = _serializeArgList(cache);
+    try {
+      globalThis.FinalizationRegistry = MockFinalizationRegistry;
 
-    using outerScopeObj = makeRegisterableObject();
+      const cache = new Map();
+      const getKey = _serializeArgList(cache);
 
-    const k1 = getKey(outerScopeObj);
-    const k2 = getKey(globalThis);
-    const k3 = getKey("primitive");
-    const k4 = getKey(globalThis, "primitive");
-    const k5 = getKey(globalThis, "primitive", outerScopeObj);
+      using outerScopeObj = makeRegisterableObject();
 
-    const persistentKeys = new Set([k1, k2, k3, k4, k5]);
+      const k1 = getKey(outerScopeObj);
+      const k2 = getKey(globalThis);
+      const k3 = getKey("primitive");
+      const k4 = getKey(globalThis, "primitive");
+      const k5 = getKey(globalThis, "primitive", outerScopeObj);
 
-    {
-      using obj1 = makeRegisterableObject();
-      using obj2 = makeRegisterableObject();
+      const persistentKeys = new Set([k1, k2, k3, k4, k5]);
 
-      const k6 = getKey(obj1);
-      const k7 = getKey(obj2);
-      const k8 = getKey(obj1, obj2);
-      const k9 = getKey(obj1, globalThis);
-      const k10 = getKey(obj1, "primitive");
-      const k11 = getKey(obj1, outerScopeObj);
+      {
+        using obj1 = makeRegisterableObject();
+        using obj2 = makeRegisterableObject();
 
-      const ephemeralKeys = new Set([k6, k7, k8, k9, k10, k11]);
+        const k6 = getKey(obj1);
+        const k7 = getKey(obj2);
+        const k8 = getKey(obj1, obj2);
+        const k9 = getKey(obj1, globalThis);
+        const k10 = getKey(obj1, "primitive");
+        const k11 = getKey(obj1, outerScopeObj);
 
-      const keys = new Set([...ephemeralKeys, ...persistentKeys]);
-      for (const key of keys) {
-        cache.set(key, "!");
+        const ephemeralKeys = new Set([k6, k7, k8, k9, k10, k11]);
+
+        const keys = new Set([...ephemeralKeys, ...persistentKeys]);
+        for (const key of keys) {
+          cache.set(key, "!");
+        }
+
+        assertEquals(cache.size, keys.size);
       }
 
-      assertEquals(cache.size, keys.size);
+      assertEquals(cache.size, persistentKeys.size);
+    } finally {
+      globalThis.FinalizationRegistry = OriginalFinalizationRegistry;
     }
-
-    assertEquals(cache.size, persistentKeys.size);
-
-    globalThis.FinalizationRegistry = OriginalFinalizationRegistry;
   });
 });
 
@@ -370,6 +374,16 @@ Deno.test(memoize.name, async (t) => {
     assertEquals(numTimesCalled, 2);
   });
 
+  await t.step("non-primitive arg with `getKey`", () => {
+    const fn = memoize(({ value }: { cacheKey: number; value: number }) => {
+      return value;
+    }, { getKey: ({ cacheKey }) => cacheKey });
+
+    assertEquals(fn({ cacheKey: 1, value: 2 }), 2);
+    assertEquals(fn({ cacheKey: 1, value: 99 }), 2);
+    assertEquals(fn({ cacheKey: 2, value: 99 }), 99);
+  });
+
   await t.step(
     "multiple non-primitive args with `getKey` returning primitive",
     () => {
@@ -502,6 +516,28 @@ Deno.test(memoize.name, async (t) => {
       assertEquals(await fn(42), -42);
       // subsequent calls also succeed (successful response from cache is used)
       assertEquals(await fn(42), -42);
+    },
+  );
+
+  await t.step(
+    "caches rejected promises for future function calls if `options.cacheRejectedPromises` is `true`",
+    async () => {
+      let rejectNext = true;
+      const fn = memoize(async (n: number) => {
+        await Promise.resolve();
+        const thisCallWillReject = rejectNext;
+        rejectNext = !rejectNext;
+        if (thisCallWillReject) {
+          throw new Error();
+        }
+        return 0 - n;
+      }, { cacheRejectedPromises: true });
+
+      // first call rejects
+      await assertRejects(() => fn(42));
+      // subsequent calls continue to reject (rejected responses from cache are used)
+      await assertRejects(() => fn(42));
+      await assertRejects(() => fn(42));
     },
   );
 

@@ -14,19 +14,19 @@ export class LruCache<K, V> extends Map<K, V>
     super();
   }
 
-  #setMostRecentlyUsed(key: K, value: V) {
+  #setMostRecentlyUsed(key: K, value: V): void {
     // delete then re-add to ensure most recently accessed elements are last
     super.delete(key);
     super.set(key, value);
   }
 
-  #pruneToMaxSize() {
+  #pruneToMaxSize(): void {
     if (this.size > this.maxSize) {
       this.delete(this.keys().next().value);
     }
   }
 
-  has(key: K) {
+  has(key: K): boolean {
     const exists = super.has(key);
 
     if (exists) {
@@ -36,7 +36,7 @@ export class LruCache<K, V> extends Map<K, V>
     return exists;
   }
 
-  get(key: K) {
+  get(key: K): V | undefined {
     if (super.has(key)) {
       const value = super.get(key)!;
       this.#setMostRecentlyUsed(key, value);
@@ -46,7 +46,7 @@ export class LruCache<K, V> extends Map<K, V>
     return undefined;
   }
 
-  set(key: K, value: V) {
+  set(key: K, value: V): this {
     this.#setMostRecentlyUsed(key, value);
     this.#pruneToMaxSize();
 

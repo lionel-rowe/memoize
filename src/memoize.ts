@@ -7,18 +7,49 @@ export type MemoizationCache<K, V> = {
   delete: (key: K) => unknown;
 };
 
-export type MemoizationOptions<This, Args extends unknown[], Return> = {
-  /** Function to get a unique cache key from the function's arguments */
-  getKey?: (this: This, ...args: Args) => unknown;
-  /** Cache (such as a `Map` object) for getting previous results */
-  cache?: MemoizationCache<unknown, Return>;
+export type MemoizationOptions<Fn extends (...args: never[]) => unknown> = {
+  /**
+   * Provide a custom cache for getting previous results. By default, a new
+   * `Map` object is instantiated upon memoization and used as a cache.
+   */
+  cache?: MemoizationCache<unknown, ReturnType<Fn>>;
+  /**
+   * Function to get a unique cache key from the function's arguments. By
+   * default, a composite key is created from all the arguments plus the `this`
+   * value, using reference equality to check for equivalence.
+   *
+   * @example
+   * ```ts
+   * import { memoize } from "@std/caching";
+   * import { assertEquals } from "@std/assert";
+   *
+   * const fn = memoize(({ value }: { cacheKey: number; value: number }) => {
+   *   return value;
+   * }, { getKey: ({ cacheKey }) => cacheKey });
+   *
+   * assertEquals(fn({ cacheKey: 1, value: 2 }), 2);
+   * assertEquals(fn({ cacheKey: 1, value: 99 }), 2);
+   * assertEquals(fn({ cacheKey: 2, value: 99 }), 99);
+   * ```
+   */
+  getKey?: (this: ThisParameterType<Fn>, ...args: Parameters<Fn>) => unknown;
   /**
    * Only use args as cache keys up to the `length` property of the function.
    * Useful for passing unary functions as array callbacks, but should be
    * avoided for functions with variable argument length (`...rest` or default
    * params)
+   *
+   * @default false
    */
   truncateArgs?: boolean;
+  /**
+   * By default, promises are automatically removed from the cache upon
+   * rejection. If `cacheRejectedPromises` is set to `true`, promises will be
+   * retained in the cache even if rejected.
+   *
+   * @default false
+   */
+  cacheRejectedPromises?: boolean;
 };
 
 // used for memoizing the `memoize` function itself to enable on-the-fly usage
@@ -56,34 +87,33 @@ const memoize_ = memoize(memoize, {
 
 export { memoize_ as memoize };
 
-function memoize<
-  Fn extends (...args: never[]) => unknown,
-  This extends ThisParameterType<Fn> = ThisParameterType<Fn>,
-  Args extends Parameters<Fn> = Parameters<Fn>,
-  Return extends ReturnType<Fn> = ReturnType<Fn>,
->(
+function memoize<Fn extends (...args: never[]) => unknown>(
   fn: Fn,
-  options?: Partial<MemoizationOptions<This, Args, Return>>,
+  options?: NoInfer<Partial<MemoizationOptions<Fn>>>,
 ): Fn & {
-  cache: MemoizationCache<unknown, Return>;
-  getKey: (this: This, ...args: Args) => unknown;
+  cache: MemoizationCache<unknown, ReturnType<Fn>>;
+  getKey: (this: ThisParameterType<Fn>, ...args: Parameters<Fn>) => unknown;
 } {
-  const truncateArgs = options?.truncateArgs ?? false;
   const cache = options?.cache ?? new Map();
   const getKey = options?.getKey ?? _serializeArgList(cache);
+  const truncateArgs = options?.truncateArgs ?? false;
+  const cacheRejectedPromises = options?.cacheRejectedPromises ?? false;
 
-  const memoized = function (this: This, ...args: Args): Return {
-    if (truncateArgs) args = args.slice(0, fn.length) as Args;
+  const memoized = function (
+    this: ThisParameterType<Fn>,
+    ...args: Parameters<Fn>
+  ): ReturnType<Fn> {
+    if (truncateArgs) args = args.slice(0, fn.length) as Parameters<Fn>;
 
     const key = getKey.apply(this, args);
 
     if (cache.has(key)) {
-      return cache.get(key) as Return;
+      return cache.get(key)!;
     }
 
-    let val = fn.apply(this, args) as Return;
+    let val = fn.apply(this, args) as ReturnType<Fn>;
 
-    if (val instanceof Promise) {
+    if (val instanceof Promise && !cacheRejectedPromises) {
       val = val.catch((reason) => {
         cache.delete(key);
         throw reason;
@@ -92,7 +122,7 @@ function memoize<
 
     cache.set(key, val);
 
-    return val as Return;
+    return val;
   } as Fn;
 
   return Object.defineProperties(Object.assign(memoized, { cache, getKey }), {
@@ -123,11 +153,12 @@ export function _serializeArgList<Return>(
       if (typeof arg === "bigint") return `${arg}n`;
 
       if (
-        typeof arg !== "symbol" && typeof arg !== "function" &&
-        (arg === null || typeof arg !== "object")
+        arg === null ||
+        ["string", "boolean", "number", "record", "tuple"].includes(typeof arg)
       ) {
         // null, string, boolean, number, or one of the upcoming
-        // [record/tuple](https://github.com/tc39/proposal-record-tuple) types
+        // [record/tuple](https://github.com/tc39/proposal-record-tuple)
+        // ECMAScript types
         try {
           return JSON.stringify(arg);
         } catch { /* fallthrough to weak cache */ }
