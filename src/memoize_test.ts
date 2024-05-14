@@ -69,16 +69,6 @@ Deno.test("fibonacci", () => {
   assertAlmostEquals(Date.now(), startTime, 10);
 });
 
-Deno.test("fibonacci", () => {
-  const fib = memoize((n: bigint): bigint =>
-    n <= 2n ? 1n : fib(n - 1n) + fib(n - 2n)
-  );
-
-  const startTime = Date.now();
-  assertEquals(fib(100n), 354224848179261915075n);
-  assertAlmostEquals(Date.now(), startTime, 10);
-});
-
 Deno.test("memoization with multiple primitive args", () => {
   let numTimesCalled = 0;
   const fn = memoize((a: number, b: number) => {
@@ -285,7 +275,7 @@ Deno.test(
 );
 
 Deno.test(
-  "multiple non-primitive args with `getKey` returning array of primitives",
+  "multiple non-primitive args with `getKey` returning stringified array of primitives",
   () => {
     let numTimesCalled = 0;
 
@@ -304,7 +294,7 @@ Deno.test(
 );
 
 Deno.test(
-  "multiple non-primitive args of different types, `getKey` returning array of primitives",
+  "multiple non-primitive args of different types, `getKey` returning custom string from props",
   () => {
     let numTimesCalled = 0;
 
