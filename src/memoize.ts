@@ -61,6 +61,7 @@ const _getKey = _serializeArgList(_cache);
  *
  * @param fn - The function to memoize
  * @param options - Options for memoization
+ * @deprecated Use [@std/cache/memoize](https://jsr.io/@std/cache/doc/memoize/~/memoize) instead.
  *
  * @example
  * ```ts

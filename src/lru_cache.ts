@@ -5,6 +5,8 @@ import type { MemoizationCache } from "./memoize.ts";
  * 	https://en.wikipedia.org/wiki/Cache_replacement_policies#LRU
  * ) cache.
  *
+ * @deprecated Use [@std/cache/lru-cache](https://jsr.io/@std/cache/doc/lru-cache/~/LruCache) instead.
+ *
  * Automatically removes entries above the max size based on when they were
  * last accessed with `get`, `set`, or `has`.
  */
